@@ -101,6 +101,8 @@ pub enum RegionOp {
     Normalize,
     FadeIn,
     FadeOut,
+    /// Snap the selection's pitch to the project scale (PitchNet-like, [`crate::app::audio_edit`]).
+    CorrectPitch,
     /// The playlist's own last item (#80): the range's song section, in its dialog ([`crate::ui::sections`]).
     Section,
 }
@@ -149,10 +151,10 @@ pub fn items(
 
 /// The audio clip editor's region menu for `range` with the playhead at tick `playhead`: column 0 `Deselect`, `Insert
 /// silence`, `Duplicate`, `Copy to playhead`, `Move to playhead`, `Clear`, `Delete space`, `Trim selection`; column 1
-/// `Normalize`, `Fade In`, `Fade Out`. The playhead items are enabled as in [`items`].
+/// `Normalize`, `Fade In`, `Fade Out`; column 2 `Correct Pitch`. The playhead items are enabled as in [`items`].
 pub fn audio_items(range: TimeRange, playhead: Option<f64>) -> Vec<PopupItem<RegionOp>> {
     use RegionOp::*;
-    let cols: [&[(RegionOp, &'static str)]; 2] = [
+    let cols: [&[(RegionOp, &'static str)]; 3] = [
         &[
             (Deselect, "Deselect"),
             (InsertSilence, "Insert silence"),
@@ -168,6 +170,7 @@ pub fn audio_items(range: TimeRange, playhead: Option<f64>) -> Vec<PopupItem<Reg
             (FadeIn, "Fade In"),
             (FadeOut, "Fade Out"),
         ],
+        &[(CorrectPitch, "Correct Pitch")],
     ];
     let outside = playhead.is_some_and(|p| !range.contains(p));
     (cols.iter().enumerate())
@@ -368,6 +371,7 @@ fn apply<T: Item>(items: &mut Vec<T>, op: RegionOp, range: TimeRange, playhead: 
         | RegionOp::Normalize
         | RegionOp::FadeIn
         | RegionOp::FadeOut
+        | RegionOp::CorrectPitch
         | RegionOp::Section => {}
     }
 }
@@ -507,6 +511,18 @@ mod tests {
         for outside in [0.0, 127.9, 256.0, 1000.0] {
             assert!(disabled(Some(outside)).is_empty(), "{outside}");
         }
+    }
+
+    #[test]
+    fn the_audio_menu_puts_correct_pitch_in_its_own_column() {
+        let items = audio_items(range(128, 256), Some(0.0));
+        let pitch: Vec<_> = items
+            .iter()
+            .filter(|i| i.id == Some(RegionOp::CorrectPitch))
+            .collect();
+        assert_eq!(pitch.len(), 1);
+        assert_eq!((pitch[0].col, pitch[0].row), (2, 0));
+        assert!(!pitch[0].disabled);
     }
 
     #[test]

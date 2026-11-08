@@ -1448,6 +1448,7 @@ fn region_op(pts: &mut Vec<Point>, op: RegionOp, range: TimeRange, p: u32, loop_
         | RegionOp::Normalize
         | RegionOp::FadeIn
         | RegionOp::FadeOut
+        | RegionOp::CorrectPitch
         | RegionOp::Section => {}
     }
 }

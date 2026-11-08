@@ -30,6 +30,7 @@ mod multifx_delay;
 mod multifx_reverb;
 pub mod note_effects;
 pub mod ogg_writer;
+pub mod pitch_edit;
 pub mod pitcher;
 pub mod pitcher2;
 pub mod playback;

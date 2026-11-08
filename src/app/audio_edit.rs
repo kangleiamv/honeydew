@@ -29,6 +29,7 @@
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
+use honeydew_audio::pitch_edit;
 use honeydew_audio::sample::SampleData;
 use honeydew_audio::sample_edit::{self as ops, frame_at, speed_ratio};
 use honeydew_audio::wav_writer::float32_wav;
@@ -42,6 +43,7 @@ use crate::sample_cache::{self, SampleKey};
 use crate::song::{LaneKind, PPQ, SamplerSlot, Song};
 use crate::ui::UiCtx;
 use crate::ui::audio_editor::{self, Action, At, stretch_of};
+use crate::ui::piano_roll::notes::{in_scale, project_scale};
 use crate::ui::preview::ClipKey;
 use crate::ui::region::{RegionOp, TimeRange};
 use crate::ui::sample_row::clip_mut;
@@ -100,6 +102,7 @@ enum Stage {
 /// at `tempo`: each channel's frames after the operation, or `None` when they are as they were (or `op` has none).
 /// Beats map to frames as the waveform draws them: trunc(trunc(beat·60·rate/tempo)·speed) ([`frame_at`]) over the
 /// SYNC stretch ratio ([`stretch_of`]). A reversed sample is reversed around the op, as it is drawn mirrored.
+/// `notes` is the project scale's enabled pitch classes (0 = C), which `Correct Pitch` snaps to; the other ops ignore it.
 pub fn edit_frames(
     sample: &SampleData,
     slot: &SamplerSlot,
@@ -107,6 +110,7 @@ pub fn edit_frames(
     op: RegionOp,
     range: TimeRange,
     playhead: u32,
+    notes: [bool; 12],
 ) -> Option<Vec<Vec<f32>>> {
     let (speed, stretch) = (speed_ratio(slot.params[2]), stretch_of(slot));
     let frame = |tick: u32| {
@@ -135,6 +139,9 @@ pub fn edit_frames(
         RegionOp::Normalize => ops::normalize(&mut ch, s..e),
         RegionOp::FadeIn => ops::fade_in(&mut ch, s..e),
         RegionOp::FadeOut => ops::fade_out(&mut ch, s..e),
+        RegionOp::CorrectPitch => {
+            pitch_edit::correct_pitch(&mut ch, sample.sample_rate as f32, s..e, notes, 1.0);
+        }
         _ => return None,
     }
     reverse(&mut ch);
@@ -165,6 +172,12 @@ pub fn target(slot: &SamplerSlot, user: &Path) -> PathBuf {
 
 fn key((channel, lane, id): At) -> ClipKey {
     ClipKey { channel, lane, id }
+}
+
+/// The project scale ([`project_scale`]) as one flag per pitch class (0 = C), what `Correct Pitch` snaps to.
+fn scale_notes(song: &Song) -> [bool; 12] {
+    let (root, mask) = project_scale(song);
+    std::array::from_fn(|i| in_scale(i as u8, root, mask))
 }
 
 fn slot_at(song: &Song, at: At) -> Option<&SamplerSlot> {
@@ -213,8 +226,9 @@ impl HoneydewApp {
         // The source the editor draws, not the engine's stretch or pitch render: the file gets no `STR1` baked in.
         let sample = (slot.and_then(SampleKey::of_slot)).and_then(|k| self.audio.samples.get(&k));
         let tempo = self.song.tempo_bpm;
+        let notes = scale_notes(&self.song);
         let edited = (slot.zip(sample.as_deref()))
-            .and_then(|(slot, s)| edit_frames(s, slot, tempo, op, range, playhead));
+            .and_then(|(slot, s)| edit_frames(s, slot, tempo, op, range, playhead, notes));
         let (Some(channels), Some(slot), Some(sample)) = (edited, slot, sample) else {
             if audio_editor::apply(&mut self.song, at, &action) {
                 self.song_edited(SongEdit::Final, tick);
@@ -399,7 +413,7 @@ mod tests {
         op: RegionOp,
         r: TimeRange,
     ) -> Option<Vec<Vec<f32>>> {
-        edit_frames(s, slot, TEMPO, op, r, 0)
+        edit_frames(s, slot, TEMPO, op, r, 0, [true; 12])
     }
 
     /// `ramp(n)` with frames `zeroed` cleared.
@@ -473,7 +487,7 @@ mod tests {
         assert_eq!(len(RegionOp::Duplicate), Some(24));
         assert_eq!(len(RegionOp::FadeOut), Some(16));
         // Copy and move to the playhead at the range's end (beat 1, frame 8): a copy, and no change.
-        let to = |op| edit_frames(&s, &slot, TEMPO, op, r, 128).map(|ch| ch[0].len());
+        let to = |op| edit_frames(&s, &slot, TEMPO, op, r, 128, [true; 12]).map(|ch| ch[0].len());
         assert_eq!(to(RegionOp::CopyToPlayhead), Some(24));
         assert_eq!(to(RegionOp::MoveToPlayhead), None, "moved onto itself");
         // Normalize lifts the range's peak to 1.0.
@@ -485,6 +499,35 @@ mod tests {
         assert_eq!(edit(&quiet, &slot, RegionOp::Clear, r), None);
         assert_eq!(edit(&quiet, &slot, RegionOp::Normalize, r), None);
         assert_eq!(edit(&s, &slot, RegionOp::Delete, r), None);
+    }
+
+    #[test]
+    fn correct_pitch_rewrites_an_off_scale_sine_and_is_a_no_op_below_the_minimum_rate() {
+        use std::f32::consts::TAU;
+        let rate = 8_000u32;
+        // +0.4 semitones sharp of A4: the op snaps it down.
+        let freq = 440.0 * (0.4f32 / 12.0).exp2();
+        let left: Vec<f32> = (0..12_000)
+            .map(|i| (TAU * freq * i as f32 / rate as f32).sin() * 0.5)
+            .collect();
+        let s = SampleData {
+            sample_rate: rate,
+            left: left.clone().into(),
+            ..SampleData::default()
+        };
+        let slot = SamplerSlot::default();
+        let edited = edit(&s, &slot, RegionOp::CorrectPitch, beats(1, 3)).unwrap();
+        assert_eq!(edited[0].len(), left.len());
+        assert!(
+            (edited[0].iter().zip(&left)).any(|(a, b)| (a - b).abs() > 1e-3),
+            "the frames changed"
+        );
+        // Below the minimum sample rate there is nothing to detect: the op leaves the frames as they were.
+        let tiny = sample(ramp(16), None);
+        assert_eq!(
+            edit(&tiny, &slot, RegionOp::CorrectPitch, beats(0, 1)),
+            None
+        );
     }
 
     fn shorthand(root: ContentRoot, relative: &str) -> Option<ContentPath> {
