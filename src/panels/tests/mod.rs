@@ -282,7 +282,7 @@ fn every_panel_fits_its_module() {
     for spec in (crate::params::modules().chain(&crate::params::LEMON_MODULES))
         .chain([&crate::params::DYNAMIC_EQ, &crate::params::MODULATOR])
         .chain([&crate::params::DE_ESSER, &crate::params::DENOISE])
-        .chain([&crate::params::HALF_TIME])
+        .chain([&crate::params::HALF_TIME, &crate::params::AUTOTUNE])
     {
         if let Some(panel) = panel_for(spec.id) {
             problems.extend(check(spec, panel));

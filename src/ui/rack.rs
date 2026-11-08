@@ -163,6 +163,7 @@ pub fn ui_height(type_id: u16) -> Option<f32> {
         honeydew_audio::modulator::MODULATOR => 8.5,
         honeydew_audio::de_esser::DE_ESSER | honeydew_audio::denoise::DENOISE => 7.5,
         honeydew_audio::half_time::HALF_TIME => 6.0,
+        honeydew_audio::autotune::AUTOTUNE => 7.0,
         _ => return None,
     })
 }

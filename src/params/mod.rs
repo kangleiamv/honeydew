@@ -4,6 +4,7 @@
 //! Pure data and formatting; no UI. Parameter values are normalised `f32` in [0, 1] and the indices are
 //! The stored param numbers (param 0 is always `Enable`), shared with the audio side.
 
+mod autotune;
 mod channel;
 mod de_esser;
 mod denoise;
@@ -26,6 +27,8 @@ mod step_tests;
 #[cfg(test)]
 mod tests;
 
+/// The Auto-Tune, Honeydew's own effect (`honeydew_audio::autotune`).
+pub use autotune::MODULE as AUTOTUNE;
 pub use channel::{CHANNEL_PARAMS, COMMON_PARAMS, DRUM_SLOT_PARAMS};
 /// The De-esser and Denoise, Honeydew's own effects (`honeydew_audio::de_esser`, `honeydew_audio::denoise`).
 pub use de_esser::MODULE as DE_ESSER;
@@ -312,13 +315,21 @@ pub fn instruments() -> impl Iterator<Item = &'static ModuleSpec> {
 }
 
 /// The module with type id `id` (effect, note effect, instrument, a plugin module, one of Lemon Studio's effects, the
-/// Dynamic EQ, the Modulator, the De-esser, Denoise or Half Time), or `None` for ids that are not registered.
+/// Dynamic EQ, the Modulator, the De-esser, Denoise, Half Time or Auto-Tune), or `None` for ids that are not
+/// registered.
 pub fn module_spec(id: u16) -> Option<&'static ModuleSpec> {
     modules()
         .chain(instruments())
         .chain(&PLUGINS)
         .chain(&LEMON_MODULES)
-        .chain([&DYNAMIC_EQ, &MODULATOR, &DE_ESSER, &DENOISE, &HALF_TIME])
+        .chain([
+            &DYNAMIC_EQ,
+            &MODULATOR,
+            &DE_ESSER,
+            &DENOISE,
+            &HALF_TIME,
+            &AUTOTUNE,
+        ])
         .find(|m| m.id == id)
 }
 

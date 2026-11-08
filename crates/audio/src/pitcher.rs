@@ -447,12 +447,12 @@ fn validate(params: &[f32], sample_rate: f32) -> Result<(), PitcherError> {
     Ok(())
 }
 
-fn latency_for(sample_rate: f32) -> usize {
+pub(crate) fn latency_for(sample_rate: f32) -> usize {
     ((sample_rate / 55.0) as usize & !3).max(4)
 }
 
 /// `buffer` `delay` samples before `write_index`, interpolated; `delay` is under the buffer's length.
-fn read(buffer: &[f32], write_index: usize, delay: f32) -> f32 {
+pub(crate) fn read(buffer: &[f32], write_index: usize, delay: f32) -> f32 {
     let len = buffer.len();
     let mut position = write_index as f32 - delay;
     if position < 0.0 {
@@ -468,7 +468,7 @@ fn read(buffer: &[f32], write_index: usize, delay: f32) -> f32 {
     buffer[index] + (buffer[next] - buffer[index]) * position.fract()
 }
 
-fn shifted(buffer: &[f32], write_index: usize, phase: f32, window: f32) -> f32 {
+pub(crate) fn shifted(buffer: &[f32], write_index: usize, phase: f32, window: f32) -> f32 {
     let other = (phase + 0.5).fract();
     let weight = 1.0 - (2.0 * phase - 1.0).abs();
     let other_weight = 1.0 - (2.0 * other - 1.0).abs();

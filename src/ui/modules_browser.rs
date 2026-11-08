@@ -207,6 +207,7 @@ const SECTIONS: [(Option<&str>, &[Entry]); 7] = [
         Some("MISC"),
         &[
             M(26),
+            M(honeydew_audio::autotune::AUTOTUNE),
             M(11),
             M(13),
             M(honeydew_audio::half_time::HALF_TIME),

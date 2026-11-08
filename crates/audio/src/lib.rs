@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod automation;
+pub mod autotune;
 mod biquad;
 pub mod builtin_drums;
 pub mod builtin_loops;
@@ -112,6 +113,7 @@ pub fn effect_info(id: u16) -> Option<EffectInfo> {
         de_esser::DE_ESSER => ("De-esser", de_esser::PARAMS),
         denoise::DENOISE => ("Denoise", denoise::PARAMS),
         half_time::HALF_TIME => ("Half Time", half_time::PARAMS),
+        autotune::AUTOTUNE => ("Auto-Tune", autotune::PARAMS),
         _ => return None,
     };
     Some(EffectInfo {
@@ -536,6 +538,14 @@ impl AudioEffect {
                     Processor::HalfTime(Box::new(state)),
                 )
             }
+            autotune::AUTOTUNE => {
+                let state = autotune::AutoTuneState::new(&autotune::DEFAULTS, sample_rate)
+                    .map_err(|_| EffectError::InvalidSampleRate)?;
+                (
+                    autotune::DEFAULTS.to_vec(),
+                    Processor::AutoTune(Box::new(state)),
+                )
+            }
             _ => return Err(EffectError::UnsupportedEffect(id)),
         };
         let mut effect = Self {
@@ -600,6 +610,7 @@ impl AudioEffect {
             Processor::Gate(_) => 255,
             Processor::Pitcher(state) => state.latency_samples(),
             Processor::Pitcher2(state) => state.latency_samples(),
+            Processor::AutoTune(state) => state.latency_samples(),
             Processor::LemonLimiter(state) => state.latency(),
             Processor::Denoise(state) => state.latency(),
             _ => 0,
@@ -610,7 +621,7 @@ impl AudioEffect {
         if !sample_rate.is_finite() || sample_rate <= 0.0 {
             return Err(EffectError::InvalidSampleRate);
         }
-        if matches!(self.id, 25 | 45) && sample_rate < 2000.0 {
+        if matches!(self.id, 25 | 45 | autotune::AUTOTUNE) && sample_rate < 2000.0 {
             return Err(EffectError::InvalidSampleRate);
         }
         if sample_rate != self.sample_rate {
@@ -948,6 +959,7 @@ enum Processor {
     DeEsser(Box<de_esser::DeEsserState>),
     Denoise(Box<denoise::DenoiseState>),
     HalfTime(Box<half_time::HalfTimeState>),
+    AutoTune(Box<autotune::AutoTuneState>),
     Monitor,
 }
 
@@ -994,6 +1006,9 @@ impl Processor {
             Self::DeEsser(state) => state.refresh(params, sample_rate),
             Self::Denoise(state) => state.refresh(params, sample_rate),
             Self::HalfTime(state) => state.refresh(params, sample_rate),
+            Self::AutoTune(state) => {
+                state.refresh(params, sample_rate).unwrap();
+            }
             Self::Monitor => {}
         }
     }
@@ -1074,6 +1089,7 @@ impl Processor {
             Self::DeEsser(state) => state.process_frame(l, r),
             Self::Denoise(state) => state.process_frame(l, r),
             Self::HalfTime(state) => state.process_frame(l, r),
+            Self::AutoTune(state) => state.process_frame(l, r),
             Self::Monitor => (l, r),
         }
     }
@@ -1135,6 +1151,7 @@ impl Processor {
             Self::DeEsser(state) => state.reset(),
             Self::Denoise(state) => state.reset(),
             Self::HalfTime(state) => state.reset(),
+            Self::AutoTune(state) => state.reset(),
             Self::Monitor => {}
         }
     }
