@@ -1,0 +1,91 @@
+name: Android APK
+
+# Builds only the Android APKs, no desktop, Alpine, web or iOS jobs. On a v* tag they go to that tag's release;
+# a manual run (Actions > Android APK > Run workflow) updates a rolling `apk-latest` prerelease instead.
+#
+# Release signing needs the repository secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS
+# and ANDROID_KEY_PASSWORD (README, Android release signing). Without ANDROID_KEYSTORE_BASE64 the job falls back to
+# debug-signed APKs so a build still works.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # Built in the job (the SDK path is only known then).
+  NDK_VERSION: 28.0.13004108
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare signing key
+        id: signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret; building debug-signed APKs instead of signed release APKs."
+            exit 0
+          fi
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/honeydew-release.jks"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@1.91.0
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-arm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Android build tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y libclang-dev
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' "ndk;$NDK_VERSION"
+          cargo install cargo-ndk --version 4.1.2 --locked
+      # Twice: with the sounds (-arm.apk), and without them (-arm-base.apk), which downloads them from the sound
+      # library's release and is what the in-app updater installs.
+      - name: Build APKs
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/honeydew-release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+            tools/android-dist.sh --release
+            tools/android-dist.sh --release --base
+          else
+            tools/android-dist.sh
+            tools/android-dist.sh --base
+          fi
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/honeydew-release.jks"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: honeydew-android-apk
+          path: target/honeydew-android-*.apk
+          if-no-files-found: error
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'apk-latest' }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || 'Android APK (latest)' }}
+          prerelease: ${{ github.ref_type != 'tag' }}
+          target_commitish: ${{ github.sha }}
+          files: target/honeydew-android-*.apk
+          fail_on_unmatched_files: true

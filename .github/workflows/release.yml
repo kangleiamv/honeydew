@@ -218,68 +218,8 @@ jobs:
           tag_name: ${{ env.TAG }}
           files: target/honeydew-web-*.zip
 
-  android:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
-      - name: Prepare signing key
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
-            if [ -z "${!name}" ]; then
-              echo "::error::Missing $name repository secret; see README Android release signing."
-              exit 1
-            fi
-          done
-          umask 077
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/honeydew-release.jks"
-      - uses: dtolnay/rust-toolchain@1.91.0
-        with:
-          targets: aarch64-linux-android, armv7-linux-androideabi
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: android-arm
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: 'platform-tools'
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Android build tools
-        run: |
-          sudo apt-get update && sudo apt-get install -y libclang-dev
-          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.0.13004108'
-          cargo install cargo-ndk --version 4.1.2 --locked
-      # Twice: with the sounds (-arm.apk), and without them (-arm-base.apk), which downloads them from the sound
-      # library's release and is what the in-app updater installs.
-      - name: Build signed APKs with and without sounds
-        env:
-          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/honeydew-release.jks
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.0.13004108"
-          tools/android-dist.sh --release
-          tools/android-dist.sh --release --base
-      - name: Remove signing key
-        if: always()
-        run: rm -f "$RUNNER_TEMP/honeydew-release.jks"
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG }}
-          files: |
-            target/honeydew-android-*-arm.apk
-            target/honeydew-android-*-arm-base.apk
-          fail_on_unmatched_files: true
+  # The Android APKs are built by the Android APK workflow (.github/workflows/android.yml), which can also be run on
+  # its own to build only the APK.
 
   # iOS (experimental): two unsigned IPAs, with and without the sounds (tools/ios-dist.sh), which AltStore, SideStore and
   # Sideloadly sign with the user's own Apple ID.
