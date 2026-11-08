@@ -1,0 +1,74 @@
+# Cirrus CI: builds the Android APKs on Cirrus's own Linux runners, independent of GitHub Actions billing.
+#
+# Setup: install the Cirrus CI GitHub App (https://github.com/apps/cirrus-ci) on the account that owns this repo and
+# grant it access to this repository. Cirrus then runs this task on every push (and exposes it on cirrus-ci.com).
+#
+# Signing (optional): set the encrypted variables ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+# ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD in the Cirrus UI for signed release APKs. Without them the task builds
+# debug-signed APKs so it still produces installable files.
+#
+# Publishing to a GitHub Release (optional): set GH_TOKEN (a PAT with `contents: write`) and the APKs are attached to
+# the rolling `apk-latest` prerelease.
+
+task:
+  name: Android APK
+  timeout_in: 90m
+  container:
+    image: ubuntu:24.04
+    cpu: 4
+    memory: 12G
+  env:
+    ANDROID_HOME: /opt/android-sdk
+    CARGO_TERM_COLOR: always
+    DEBIAN_FRONTEND: noninteractive
+  install_script: |
+    set -eux
+    apt-get update
+    apt-get install -y --no-install-recommends \
+      build-essential ca-certificates clang curl git libclang-dev openjdk-21-jdk-headless \
+      pkg-config python3 unzip
+    # Rust 1.91.0 (the project's MSRV) with the two Android ABIs.
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+      sh -s -- -y --profile minimal --default-toolchain 1.91.0
+    . "$HOME/.cargo/env"
+    rustup target add aarch64-linux-android armv7-linux-androideabi
+    cargo install cargo-ndk --version 4.1.2 --locked
+    # Android command-line tools, SDK platform 36, build tools 36.0.0 and NDK 28.
+    mkdir -p "$ANDROID_HOME/cmdline-tools"
+    curl -sSfL -o /tmp/cmdline-tools.zip \
+      https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
+    unzip -q /tmp/cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
+    mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+    sdk="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+    (yes | "$sdk" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1) || true
+    "$sdk" --sdk_root="$ANDROID_HOME" \
+      "platforms;android-36" "build-tools;36.0.0" "ndk;28.0.13004108" "platform-tools"
+    # GitHub CLI, for the optional release upload.
+    apt-get install -y gh || true
+  build_script: |
+    set -eux
+    export PATH="$HOME/.cargo/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+    export ANDROID_SDK_ROOT="$ANDROID_HOME"
+    export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.0.13004108"
+    if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+      umask 077
+      printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$HOME/honeydew-release.jks"
+      export ANDROID_KEYSTORE_FILE="$HOME/honeydew-release.jks"
+      tools/android-dist.sh --release
+      tools/android-dist.sh --release --base
+    else
+      echo "No ANDROID_KEYSTORE_BASE64: building debug-signed APKs."
+      tools/android-dist.sh
+      tools/android-dist.sh --base
+    fi
+    rm -f "$HOME/honeydew-release.jks"
+    if [ -n "${GH_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
+      repo="$CIRRUS_REPO_FULL_NAME"
+      gh release view apk-latest --repo "$repo" >/dev/null 2>&1 ||
+        gh release create apk-latest --repo "$repo" --prerelease \
+          --title "Android APK (latest)" --notes "Built by Cirrus CI"
+      gh release upload apk-latest target/honeydew-android-*.apk --repo "$repo" --clobber
+    fi
+  artifacts:
+    path: "target/honeydew-android-*.apk"
+    expire_in: 30 days
